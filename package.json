@@ -33,9 +33,6 @@
     "eslint-config-airbnb-base": "^12.1.0",
     "eslint-plugin-import": "^2.12.0"
   },
-  "dependencies": {
-    "event-target-shim": "^6.0.2"
-  },
   "scripts": {
     "prepublishOnly": "npm run build"
   }
