@@ -1,4 +1,4 @@
-import { EventTarget } from 'event-target-shim';
+import { EventTarget } from './event';
 
 class HugeUploader {
     constructor(params) {
@@ -24,6 +24,7 @@ class HugeUploader {
         this._reader = new FileReader();
         this._eventTarget = new EventTarget();
 
+        this._chunksProgress = Array(this.totalChunks).fill(0);
         this._validateParams();
         this._sendChunks();
 
@@ -99,7 +100,19 @@ class HugeUploader {
         form.append('file', this.chunk);
         this.headers['uploader-chunk-number'] = this.chunkCount;
 
-        return fetch(this.endpoint, { method: 'POST', headers: this.headers, body: form });
+        const request = new XMLHttpRequest();
+        const chunkNumber = this.chunkCount;
+        request.upload.addEventListener('progress', e => this._publishProgress(e, chunkNumber));
+        return new Promise((resolve) => {
+            request.addEventListener('load', () => {
+                resolve(request);
+            });
+            request.open('POST', this.endpoint);
+            for (const key in this.headers) {
+                request.setRequestHeader(key, this.headers[key]);
+            }
+            request.send(form);
+        });
     }
 
     /**
@@ -115,6 +128,13 @@ class HugeUploader {
         this._eventTarget.dispatchEvent(new CustomEvent('error', { detail: `An error occured uploading chunk ${this.chunkCount}. No more retries, stopping upload` }));
     }
 
+    _publishProgress(e, chunkNumber) {
+        this._chunksProgress[chunkNumber] = e.loaded / e.total;
+        this._eventTarget.dispatchEvent(new CustomEvent('progress', {
+            detail: this._chunksProgress.reduce((a, b) => a + b) / this.totalChunks
+        }));
+    }
+
     /**
      * Manage the whole upload by calling getChunk & sendChunk
      * handle errors & retries and dispatch events
@@ -126,15 +146,11 @@ class HugeUploader {
         .then(() => this._sendChunk())
         .then((res) => {
             if (res.status === 200 || res.status === 201 || res.status === 204) {
-                if (++this.chunkCount < this.totalChunks) this._sendChunks();
+                this.chunkCount += 1;
+                if (this.chunkCount < this.totalChunks) this._sendChunks();
                 else {
-                  res.text().then(body => {
-                    this._eventTarget.dispatchEvent(new CustomEvent('finish', { detail: body }));
-                  })
+                    this._eventTarget.dispatchEvent(new CustomEvent('finish', { detail: res.responseText }));
                 }
-
-                const percentProgress = Math.round((100 / this.totalChunks) * this.chunkCount);
-                this._eventTarget.dispatchEvent(new CustomEvent('progress', { detail: percentProgress }));
             }
 
             // errors that might be temporary, wait a bit then retry
@@ -145,7 +161,7 @@ class HugeUploader {
 
             else {
                 if (this.paused || this.offline) return;
-                this._eventTarget.dispatchEvent(new CustomEvent('error', { detail: res }));
+                this._eventTarget.dispatchEvent(new CustomEvent('error', { detail: res.statusText }));
             }
         })
         .catch((err) => {
